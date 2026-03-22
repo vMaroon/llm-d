@@ -1,0 +1,71 @@
+# Tutorial benchmark template — single-stage version of the inference-scheduling guide workload.
+#
+# Matches the guide's shared_prefix parameters:
+#   150 prefix groups × 5 prompts/group, 6000-token system prompt,
+#   1200-token question, 1000-token output.
+#
+# Single stage at rate 35 req/s for 120s (~4200 requests).
+# Adjust rate/duration as needed for your hardware.
+#
+# For the simulator: model_name is "random" (what the simulator serves).
+# For real GPUs:     change model_name to your deployed model (e.g., Qwen/Qwen3-32B).
+# Tokenizer always uses Qwen/Qwen3-32B to generate realistic synthetic prompts.
+
+endpoint:
+  stack_name: &stack_name tutorial-benchmark
+  model: &model random
+  namespace: &namespace ${NAMESPACE}
+  base_url: &url http://${GATEWAY_SVC}.${NAMESPACE}.svc.cluster.local:80
+  hf_token_secret: llm-d-hf-token
+
+control:
+  work_dir: $HOME/llm-d-bench-work
+  kubectl: kubectl
+
+harness:
+  name: &harness_name inference-perf
+  results_pvc: ${BENCHMARK_PVC}
+  namespace: *namespace
+  parallelism: 1
+  wait_timeout: 600
+  image: ghcr.io/llm-d/llm-d-benchmark:v0.5.0
+
+env:
+  - name: RAYON_NUM_THREADS
+    value: "4"
+
+workload:
+
+  shared_prefix_tutorial:
+    load:
+      type: poisson
+      stages:
+        - rate: 35
+          duration: 120
+    api:
+      type: completion
+      streaming: true
+    server:
+      type: vllm
+      model_name: *model
+      base_url: *url
+      ignore_eos: true
+    tokenizer:
+      pretrained_model_name_or_path: Qwen/Qwen3-32B
+    data:
+      type: shared_prefix
+      shared_prefix:
+        num_groups: 150
+        num_prompts_per_group: 5
+        system_prompt_len: 6000
+        question_len: 1200
+        output_len: 1000
+        enable_multi_turn_chat: false
+    report:
+      request_lifecycle:
+        summary: true
+        per_stage: true
+        per_request: true
+    storage:
+      local_storage:
+        path: /workspace
