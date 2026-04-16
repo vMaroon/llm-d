@@ -76,7 +76,7 @@ With speculative indexing enabled (recommended) — the three extension points c
 vLLM and SGLang publish three event types over ZMQ whenever their KV-cache state changes:
 * **`BlockStored`** — blocks with the given content hashes have been created on a specific device tier. Payload includes the chained parent hash, the token chunk, any LoRA ID/name, and any multimodal extra keys.
 * **`BlockRemoved`** — blocks with the given hashes have been evicted from a specific device tier and/or attention group.
-* **`AllBlocksCleared`** — the pod dropped its entire cache (a reset). This can occur in RL weights rollouts and other scenarios. The indexer drops all entries associated with the pod via a reverse `pod → request keys` index.
+* **`AllBlocksCleared`** — the pod dropped its entire cache (e.g. after an RL weights rollout). Currently the indexer **logs the event but does not purge stale entries** from the index — the `kvblock.Index` interface has no bulk-clear-by-pod method yet. Stale entries are instead evicted lazily through the index's own LRU policy. Adding an efficient reverse lookup (`pod → block keys`) to support immediate purge is tracked as future work.
 
 ```mermaid
 sequenceDiagram
@@ -101,7 +101,7 @@ sequenceDiagram
         else BlockRemoved
             Worker->>Index: Evict(engineKey, podEntry)
         else AllBlocksCleared
-            Worker->>Index: Clear(podIdentifier)
+            Worker->>Worker: Log event (no-op today;<br/>bulk purge not yet implemented)
         end
     end
 ```
@@ -200,9 +200,9 @@ For example, consider a prompt with block keys `[B0, B1, B2, B3, B4]` and three 
 ```
 Block keys:   B0    B1    B2    B3    B4
 
-Pod A:        yes   yes   yes   yes   no    → score = 4 blocks
-Pod B:        yes   yes   no    -     -     → score = 2 blocks (chain breaks at B2)
-Pod C:        no    -     -     -     -     → score = 0 blocks (no prefix)
+Pod A:        yes   yes   yes   yes   no    → score = 4.0 (all on GPU, weight 1.0 each)
+Pod B:        yes   yes   no    -     -     → score = 1.8 (B0 on GPU=1.0, B1 on CPU=0.8)
+Pod C:        no    -     -     -     -     → score = 0.0 (no prefix)
 ```
 
 Even if Pod C happened to hold `B3` and `B4`, those entries are unusable without the preceding chain, and the score is zero.
@@ -295,8 +295,8 @@ Top-level parameters of the `precise-prefix-cache-scorer` plugin.
 
 | Field       | Type    | Default | Description                        |
 |:------------|:--------|:--------|:-----------------------------------|
-| `blockSize` | integer | `16`    | Tokens per KV-block.               |
-| `hashSeed`  | string  | `""`    | Seed for the initial FNV-64a hash. |
+| `blockSize` | integer | `16`    | Tokens per KV-block. **Must match** the model server's `--block-size` flag. |
+| `hashSeed`  | string  | `""`    | Seed for the initial FNV-64a hash. **Must align** with `PYTHONHASHSEED` on model server pods. |
 
 ### Indexer
 
@@ -346,7 +346,7 @@ Configure exactly one of the following. If more than one is set, the first resol
 | `concurrency` | integer | `4` | Parallel event-processing workers. |
 | `engineType` | string | `vllm` | `vllm` or `sglang`. |
 | `discoverPods` | boolean | `true` | Enable Kubernetes pod discovery (per-pod subscriber creation). |
-| `podDiscoveryConfig.podLabelSelector` | string | `llm-d.ai/inference-serving=true` | Label selector for model-server pods. Matches the label set by the llm-d guides. |
+| `podDiscoveryConfig.podLabelSelector` | string | `llm-d.ai/inferenceServing=true` | Label selector for model-server pods. Matches the label set by the llm-d guides. |
 | `podDiscoveryConfig.podNamespace` | string | `""` | Namespace to watch. Empty watches all (requires cluster-wide RBAC). |
 | `podDiscoveryConfig.socketPort` | integer | `5557` | Port exposed by each model-server pod for its ZMQ socket. |
 

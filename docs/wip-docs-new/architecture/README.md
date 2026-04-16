@@ -41,7 +41,7 @@ By default, the llm-d EPP leverages scorers that are used to selecting the optim
 
 In addition, the EPP can also query "consultant" components which can execute arbitrary scoring logic, enabling more sophisticated patterns. For more details on example "Consultants", see:
 - [Latency Predictor](advanced/latency-predictor.md), which trains an XGBoost model online (using measured latency of previous requests) for scheduling decisions
-- [KV-Cache Indexer](advanced/kv-indexer.md), which maintains a globally consistent, event-driven view of each Model Server's KV cache state and serves as the foundation for advanced prefix-cache-aware scheduling (multimodal, HMA-aware routing, and more)
+- [KV-Cache Indexer](advanced/kv-indexer.md), which maintains a globally consistent, event-driven view of each Model Server's KV cache state and serves as the foundation for advanced prefix-cache-aware scheduling (multimodal, hybrid-attention-aware routing, and more)
 
 ### Autoscaling
 
