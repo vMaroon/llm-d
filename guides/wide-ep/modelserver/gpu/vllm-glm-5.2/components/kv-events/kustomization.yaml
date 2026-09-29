@@ -1,14 +1,15 @@
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
-# Emit per-rank KV-cache events for the precise prefix-cache router variant
-# (see ../../../../../README.precise-prefix-cache-routing.md). The block
-# size and PYTHONHASHSEED must be identical on every engine pod, and the block
-# size must match the router's tokenProcessorConfig.blockSizeTokens.
+# Emit per-rank KV-cache events from the prefill ranks for the precise
+# prefix-cache router variant (see ../../../../../README.precise-prefix-cache-routing.md).
+# Decode ranks publish none: the router scores prefix affinity for prefill
+# only and subscribes to prefill pods alone (podLabelSelector in
+# ../../../../../router/precise-routing.values.yaml). The block size and
+# PYTHONHASHSEED stay identical on every engine pod, and the block size must
+# match the router's tokenProcessorConfig.blockSizeTokens.
 
 # The patch below matches roles, containers, and env entries by name via
-# the DisaggregatedSet schema the base declares. The common env additions
-# are written once under the prefill role (&kv-events-common) and reused
-# for the decode role (*kv-events-common).
+# the DisaggregatedSet schema the base declares.
 patches:
   - patch: |-
       apiVersion: disaggregatedset.x-k8s.io/v1
@@ -18,7 +19,7 @@ patches:
       spec:
         roles:
           - name: prefill
-            spec: &kv-events-common
+            spec:
               leaderWorkerTemplate:
                 workerTemplate:
                   spec:
@@ -32,4 +33,14 @@ patches:
                           - name: PYTHONHASHSEED
                             value: "0"
           - name: decode
-            spec: *kv-events-common
+            spec:
+              leaderWorkerTemplate:
+                workerTemplate:
+                  spec:
+                    containers:
+                      - name: vllm
+                        env:
+                          - name: KV_BLOCK_SIZE
+                            value: "64"
+                          - name: PYTHONHASHSEED
+                            value: "0"

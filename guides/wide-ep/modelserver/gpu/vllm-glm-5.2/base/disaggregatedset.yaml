@@ -162,6 +162,13 @@ spec:
                       # tokenProcessorConfig.blockSizeTokens, or the index stays empty.
                       BLOCK_SIZE_ARGS="--block-size ${KV_BLOCK_SIZE}"
                     fi
+                    RENDER_ARGS=""
+                    if [ "${ENABLE_RENDER_ENDPOINTS:-0}" = "1" ]; then
+                      # Serve /v1/*/render on every rank's API server for the
+                      # router's token-producer. vLLM registers them only
+                      # with --enable-scale-out.
+                      RENDER_ARGS="--enable-scale-out"
+                    fi
 
                     exec vllm serve $MTP_ARGS --kv-cache-dtype fp8 \
                       zai-org/GLM-5.2-FP8 \
@@ -181,7 +188,7 @@ spec:
                       --max-num-batched-tokens 2048 \
                       --data-parallel-start-rank $START_RANK \
                       --kv_transfer_config "$KV_TRANSFER_CONFIG" \
-                      $KV_EVENTS_ARGS $BLOCK_SIZE_ARGS \
+                      $KV_EVENTS_ARGS $BLOCK_SIZE_ARGS $RENDER_ARGS \
                       --moe-backend deep_gemm \
                       --all2all-backend deepep_high_throughput
                 env:

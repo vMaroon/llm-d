@@ -3,13 +3,12 @@
 # (precise-prefix-cache-producer) plus load-gated affinity. Apply after
 # wide-ep.values.yaml; targetPorts and matchLabels are inherited from it.
 #
-# Prerequisites beyond the base guide (see the README section
-# "Precise prefix-cache routing"):
-# - modelserver deployed with the kv-events component, so every rank
+# Prerequisites beyond the base guide (see
+# README.precise-prefix-cache-routing.md):
+# - modelserver deployed with the kv-events component, so every prefill rank
 #   publishes KV-cache events on its compensated ZMQ port.
-# - the render Service from ../render/, which fronts the prefill pods'
-#   /v1/*/render endpoints for the token-producer.
-# - an EPP build with per-rank KV-event attribution (llm-d-router#2233).
+# - modelserver deployed with the render-endpoints component, so every
+#   prefill rank serves /v1/*/render for the token-producer.
 router:
   epp:
     # The token-load-scorer's in-flight token accounting is local to each EPP
@@ -35,7 +34,17 @@ router:
             # silently producing token IDs from the wrong tokenizer.
             modelName: zai-org/GLM-5.2-FP8
             vllm:
-              url: http://wide-ep-render:8000
+              # Render on the prefill ranks themselves, round-robin per
+              # request across every rank's API server (port 8000 + rank
+              # index), with one retry on another rank. Decode endpoints
+              # match no rule and are excluded: their ports belong to the
+              # routing-proxy sidecar.
+              endpointDiscovery:
+                portRules:
+                - selector:
+                    matchLabels:
+                      llm-d.ai/role: prefill
+                  basePort: 8000
         - type: endpoint-notification-source
         - type: precise-prefix-cache-producer
           parameters:
@@ -57,10 +66,17 @@ router:
             tokenProcessorConfig:
               # Must equal the engines' KV_BLOCK_SIZE (kv-events component).
               blockSizeTokens: 64
+              # XXH64 block hashing, about 8x cheaper than the default
+              # cbor-fnv. Block keys are internal to the router's index, so
+              # this need not match the engine. Change it only on a fresh
+              # index: keys built under one algorithm never match the other.
+              hashAlgorithm: xxh64
             kvEventsConfig:
               topicFilter: "kv@"
               discoverPods: true
               podDiscoveryConfig:
+                # Only prefill ranks publish KV events (kv-events component).
+                podLabelSelector: llm-d.ai/role=prefill
                 socketPort: 5557
         - type: inflight-load-producer
           parameters:

@@ -26,8 +26,10 @@ networking on CoreWeave.
 * Use a Gateway API Inference Extension bundle >= `v1.5.0-rc.2`. Earlier CRD
   generations allow only one `targetPort`, while this deployment exposes all
   eight DP rank ports.
-* Use an EPP build with per-rank KV-event attribution
-  ([llm-d-router#2233](https://github.com/llm-d/llm-d-router/pull/2233)).
+* Use llm-d Router v0.11 or later: it renders on discovered endpoints
+  ([llm-d-router#2701](https://github.com/llm-d/llm-d-router/pull/2701)) and
+  limits KV-event subscriptions by pod label
+  ([llm-d-router#2445](https://github.com/llm-d/llm-d-router/pull/2445)).
 * Deploy the [LeaderWorkerSet controller](https://lws.sigs.k8s.io/docs/installation/).
 * Provide three 8-GPU H200 nodes on the same all-to-all RDMA fabric.
 * Checkout the llm-d repository:
@@ -110,8 +112,13 @@ helm install ${GUIDE_NAME} \
 
 #### Deploy using LeaderWorkerSet
 
-The overlay contains the complete tested modelserver and render-Service
-configuration:
+The overlay contains the complete tested modelserver configuration. Its
+`kv-events` component makes every prefill rank publish KV-cache events, and
+its `render-endpoints` component starts the prefill ranks with
+`--enable-scale-out`, so every rank's API server serves `/v1/*/render`. The
+router tokenizes each prompt on one of those ranks, round-robin across all of
+them, so render capacity grows with the prefill fleet and no render Service is
+deployed:
 
 ```bash
 kubectl apply -n ${NAMESPACE} \
@@ -175,15 +182,21 @@ curl -X POST http://${IP}/v1/completions \
 
 ### 3. Verify Precise Routing
 
-The render Service must return token IDs:
+A prefill rank must return token IDs. A 404 here means the rank was started
+without `--enable-scale-out`, so precise routing is inert while requests still
+return 200 from the remaining scorers:
 
 ```bash
+PREFILL_IP=$(kubectl -n ${NAMESPACE} get pods \
+  -l llm-d.ai/inference-serving=true,llm-d.ai/role=prefill \
+  -o jsonpath='{.items[0].status.podIP}')
 kubectl run render-check --rm -i --restart=Never \
-  --image=python:3.12-alpine --namespace="${NAMESPACE}" -- \
+  --image=python:3.12-alpine --namespace="${NAMESPACE}" \
+  --env="PREFILL_IP=${PREFILL_IP}" -- \
   python -c '
-import json, urllib.request
+import json, os, urllib.request
 data = json.dumps({"model": "zai-org/GLM-5.2-FP8", "prompt": "render check", "max_tokens": 1}).encode()
-request = urllib.request.Request("http://wide-ep-render:8000/v1/completions/render", data=data, headers={"Content-Type": "application/json"})
+request = urllib.request.Request("http://" + os.environ["PREFILL_IP"] + ":8000/v1/completions/render", data=data, headers={"Content-Type": "application/json"})
 with urllib.request.urlopen(request, timeout=10) as response:
     body = json.load(response)
 assert isinstance(body, list) and body and body[0].get("token_ids"), body
@@ -191,8 +204,8 @@ print(body[0]["token_ids"])
 '
 ```
 
-Each engine pod must have eight established EPP subscriptions on ports
-`5557` through `5564`:
+Each prefill pod must have eight established EPP subscriptions on ports
+`5557` through `5564`. Decode pods publish no KV events:
 
 ```bash
 EPP_IP=$(kubectl -n ${NAMESPACE} get endpointslices \
@@ -200,7 +213,7 @@ EPP_IP=$(kubectl -n ${NAMESPACE} get endpointslices \
   -o jsonpath='{.items[0].endpoints[0].addresses[0]}')
 
 for POD in $(kubectl -n ${NAMESPACE} get pods \
-  -l llm-d.ai/inference-serving=true -o name); do
+  -l llm-d.ai/inference-serving=true,llm-d.ai/role=prefill -o name); do
   echo "${POD}"
   kubectl -n ${NAMESPACE} exec "${POD}" -c vllm -- python3 -c "
 hx=''.join(f'{int(o):02X}' for o in reversed('${EPP_IP}'.split('.')))
@@ -214,6 +227,22 @@ done
 Send the same long prompt twice. The second request must return to the same
 prefill rank, and that rank's `vllm:prefix_cache_hits_total` delta should be
 close to the prompt length and aligned to 64-token blocks.
+
+With router monitoring enabled ([step 3](#3-optional-enable-monitoring), which
+also turns off metrics authentication), the router's own counters show the
+same thing:
+
+<!-- llm-d-cicd:skip start -->
+```bash
+kubectl port-forward -n ${NAMESPACE} deploy/${GUIDE_NAME}-epp 9090:9090 &
+curl -s localhost:9090/metrics | grep -E '^llm_d_epp_(prefix_cache_affinity_filter_decisions_total|kv_cache_index_max_pod_hit_count_total)'
+```
+<!-- llm-d-cicd:skip end -->
+
+The repeated request should add one `outcome="sticky"` decision, and
+`llm_d_epp_kv_cache_index_max_pod_hit_count_total` should be above zero. If
+every decision is `no_match`, the router is not seeing the engine's tokens and
+routing is load-only: check the render call above first.
 
 ## Benchmarking
 

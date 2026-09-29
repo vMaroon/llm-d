@@ -4,8 +4,8 @@ kind: Kustomization
 # (DEP8) -> 3 nodes / 24 GPUs.
 resources:
   - ../p2w1d1w1
-  - ../../../../../render
 components:
   - ../../components/kv-events
+  - ../../components/render-endpoints
 patches:
   - path: delete-evictor.yaml

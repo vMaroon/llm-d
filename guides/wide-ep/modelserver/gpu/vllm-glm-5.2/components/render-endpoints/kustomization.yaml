@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+# Serve vLLM's /v1/*/render endpoints on every prefill rank for the precise
+# prefix-cache router variant (see ../../../../../README.precise-prefix-cache-routing.md).
+# The router's token-producer renders on these ranks through endpoint
+# discovery (../../../../../router/precise-routing.values.yaml).
+#
+# vLLM serves the render endpoints on `vllm serve` only with
+# --enable-scale-out, which the prefill script adds when
+# ENABLE_RENDER_ENDPOINTS=1. Without it every render call returns 404: no
+# request carries token IDs, the precise index never matches, and requests
+# still return 200 from the remaining scorers.
+patches:
+  - patch: |-
+      apiVersion: disaggregatedset.x-k8s.io/v1
+      kind: DisaggregatedSet
+      metadata:
+        name: wide-ep-nvidia-gpu-vllm-glm-5-2
+      spec:
+        roles:
+          - name: prefill
+            spec:
+              leaderWorkerTemplate:
+                workerTemplate:
+                  spec:
+                    containers:
+                      - name: vllm
+                        env:
+                          - name: ENABLE_RENDER_ENDPOINTS
+                            value: "1"
