@@ -53,7 +53,11 @@ router:
               vllm:
                 # Render on the Ready InferencePool endpoints, on their
                 # inference port (no portRules), round-robin.
-                endpointDiscovery: {}
+                endpointDiscovery:
+                  # Leave budget for the retry on another endpoint (vllm.timeout
+                  # defaults to 5s): a pod busy serving is the likeliest to
+                  # render slowly.
+                  attemptTimeout: 2s
                 # How /v1/messages (Anthropic) and /v1/responses requests are
                 # tokenized. `auto` (default) probes the render endpoint once and
                 # uses vLLM's native /v1/messages/render or /v1/responses/render
@@ -71,7 +75,10 @@ router:
                 blockSizeTokens: 64
                 # Block keys are internal to the index and need not match
                 # vLLM's hashes. xxh64 hashes a prompt about 8x faster than the
-                # cbor-fnv default (llm-d/llm-d-router#2237).
+                # cbor-fnv default (llm-d/llm-d-router#2237). It must not change
+                # while a persisted or shared index (e.g. the Redis backend)
+                # holds keys; change it only with an index flush. This guide's
+                # in-memory index is rebuilt when the router restarts.
                 hashAlgorithm: xxh64
               speculativeIndexing: true
               indexerConfig:

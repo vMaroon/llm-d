@@ -24,6 +24,9 @@ router:
             parameters:
               tokenProcessorConfig:
                 blockSizeTokens: 64
+                # Router-internal block keys, as in the vLLM values: must not
+                # change while a persisted or shared index (e.g. the Redis
+                # backend) holds keys; change it only with an index flush.
                 hashAlgorithm: xxh64
               speculativeIndexing: true
               indexerConfig:
