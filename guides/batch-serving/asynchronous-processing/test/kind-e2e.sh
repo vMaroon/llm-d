@@ -113,6 +113,12 @@ require helm
 require git
 ok "kind / kubectl / helm / git present"
 
+# The host CPU topology bounds the cores the vLLM CPU worker can use, so record
+# it next to the result.
+if command -v lscpu >/dev/null 2>&1; then
+  lscpu | grep -E '^ *(Model name|CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|Socket\(s\)|NUMA node\(s\)):' || true
+fi
+
 # ---------------------------------------------------------------------------
 # 1. Throwaway cluster
 # ---------------------------------------------------------------------------
@@ -162,6 +168,11 @@ kubectl apply -n "${BASELINE_NAMESPACE}" -k "${REPO_ROOT}/guides/${BASELINE_GUID
 # Shrink the modelserver to a tiny ungated model that fits a developer machine.
 # args is a non-merge-key list (replaced wholesale); env merges by name so the
 # existing HF_TOKEN entry is preserved.
+#
+# VLLM_CPU_OMP_THREADS_BIND=nobind: vLLM's automatic binding takes one logical
+# CPU per physical core and reserves one of them for the scheduler process,
+# which leaves the worker a single core on a 2-core SMT host. Without binding
+# the worker uses every CPU the container is allowed.
 kubectl patch deployment "${BASELINE_GUIDE}-cpu-vllm-decode" \
   -n "${BASELINE_NAMESPACE}" --type=strategic --patch "$(cat <<EOF
 spec:
@@ -177,6 +188,8 @@ spec:
           env:
             - name: VLLM_CPU_KVCACHE_SPACE
               value: "4"
+            - name: VLLM_CPU_OMP_THREADS_BIND
+              value: nobind
           resources:
             requests:
               cpu: "1"
@@ -195,6 +208,8 @@ if ! kubectl wait --for=condition=available --timeout="${BASELINE_TIMEOUT}s" \
   exit 1
 fi
 ok "Baseline stack ready"
+# Startup log of a healthy modelserver, for comparison with a failed run's dump.
+kubectl logs -n "${BASELINE_NAMESPACE}" "deployment/${BASELINE_GUIDE}-cpu-vllm-decode" --tail=100 || true
 
 # ---------------------------------------------------------------------------
 # 4. Message queue (Redis)
